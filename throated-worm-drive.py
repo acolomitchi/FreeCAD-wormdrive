@@ -1,6 +1,7 @@
 import FreeCAD as App
-import Part
-import PartDesign
+import Part, PartDesign
+import Mesh, MeshPart
+
 import math
 
 # Gui.activeView().setActiveObject('pdbody', bodyObj)
@@ -8,7 +9,7 @@ import math
 # Gui.Selection.addSelection(bodyObj)
 # Gui.ActiveDocument.ActiveView.setAxisCross(True)
 
-def makeWorkGear( \
+def makeThroatedWormGear( \
     bodyObj, \
     sweepAngleStep = 7.5, \
     module = 1.25, \
@@ -18,7 +19,8 @@ def makeWorkGear( \
     gearID = 10, \
     gearHeight = 40, \
     pressureAngleDeg = 20, \
-    clearance = 0.0 \
+    clearance = 0.0, \
+    wormGearName = '' \
 ) :
 
     import InvoluteGearFeature as gf
@@ -31,7 +33,8 @@ def makeWorkGear( \
     subtractorPrefix = f"{bodyObj.Name}fs"
     trimmedSubPrefix = f"{bodyObj.Name}Ts"
     trimmerToolName = f"{bodyObj.Name}_tool"
-    wormGearName = f"{bodyObj.Name}_WormGear"
+    if (wormGearName is None) or (len(f"{wormGearName}") == 0) :
+        wormGearName = f"{bodyObj.Name}_WormGear"
     if clearance > 0 :
         origWirePrefix = f"{bodyObj.Name}rw"
     
@@ -65,12 +68,16 @@ def makeWorkGear( \
         wwheel.NumberOfTeeth = teethCount
         wwheel.Modules.Value = module
         wwheel.PressureAngle.Value = pressureAngleDeg
+        if wwheel.ViewObject is not None :
+            wwheel.ViewObject.Visibility = False
         if clearance > 0 :
             owheel = App.ActiveDocument.addObject("Part::Offset2D",f"{wirePrefix}{i}")
             bodyObj.Group = bodyObj.Group + [owheel]
-            owheel.Value = - clearSelection / 2.0
+            owheel.Value = - clearance / 2.0
             owheel.Source = wwheel
             wwheel = owheel
+            if wwheel.ViewObject is not None :
+                wwheel.ViewObject.Visibility = False
         plMatrix = App.Matrix()
         if i == 0 :
             plMatrix.move(radius, 0, 0)
@@ -138,18 +145,81 @@ def makeWorkGear( \
     wormGear.Tool = trimmer
     return wormGear
 
+def makeThroatedWormWheel(
+    bodyObj, \
+    sweepAngleStep = 7.5, wheelThickness = 10, \
+    module = 1.25, \
+    teethCount = 36, \
+    threads = 1, \
+    gearOD = 25, \
+    gearID = 10, \
+    gearHeight = 40, \
+    pressureAngleDeg = 20, \
+    clearance = -1 \
+) :
+    hobName = f"{bodyObj.Name}_hobGear"
+    if clearance < 0 :
+        clearance = 0.150
+    hob = makeThroatedWormGear( \
+        bodyObj, sweepAngleStep, \
+        module, teethCount, threads, \
+        gearOD, gearID, gearHeight, pressureAngleDeg, \
+        clearance, hobName \
+    )
+    if hob.ViewObject is not None:
+        hob.ViewObject.Visibility = False
+    wOD = (teethCount + 2)*module
+    wID = (teethCount - 2.5)*module
+    hobbingRadius = (wOD+gearID) / 2.0
+
+    wheelPlate = App.ActiveDocument.addObject("Part::Cylinder", f"{bodyObj.Name}_wheelRound")
+    bodyObj.Group = bodyObj.Group + [wheelPlate]
+    wheelPlate.Radius = wOD / 2.0
+    wheelPlate.Height = wheelThickness
+    plMatrix = App.Matrix()
+    plMatrix.move(App.Vector(0, 0, -wheelThickness/2.0))
+    # plMatrix.rotateX(math.pi /2)
+    wheelPlate.Placement.Matrix = plMatrix
+    
+    wheelStep = 2*math.pi / teethCount
+    hobStep = 2*math.pi / threads
+    
+    wormWheel = wheelPlate
+    for i in range(2) :
+        stop = App.ActiveDocument.addObject("App::Link", f"{bodyObj.Name}hs{i}")
+        bodyObj.Group = bodyObj.Group + [stop]
+        stop.setLink(hob)
+        plMatrix = App.Matrix()
+        if threads > 1 :
+            plMatrix.rotateY(i*hobStep)
+        plMatrix.move(App.Vector(-hobbingRadius, 0, 0))
+        plMatrix.rotateZ(i*wheelStep)
+        stop.Placement.Matrix = plMatrix
+        
+        if i < teethCount - 1 :
+            substName = f"{bodyObj.Name}hobt{teethCount-i}"
+        else :
+            substName = f"{bodyObj.Name}_WormWheel"
+        hobbed = App.ActiveDocument.addObject("Part::Cut", substName)
+        bodyObj.Group = bodyObj.Group + [hobbed]
+        hobbed.Base = wormWheel
+        hobbed.Tool = stop
+        wormWheel = hobbed
+    return wormWheel
+
 if App.ActiveDocument is None:
     doc = App.newDocument("NoName")
     App.ActiveDocument = doc
 
 module = 1.25
 teethCount = 36
-threadCount = 4
+threadCount = 1
 
-gearBody = App.activeDocument().addObject('PartDesign::Body', 'Gear')
-wormGear = makeWorkGear(gearBody, 1.5, module, teethCount, threadCount)
+# gearBody = App.activeDocument().addObject('PartDesign::Body', 'Gear')
+# wormGear = makeThroatedWormGear(gearBody, 1.5, module, teethCount, threadCount)
+wheelBody = App.activeDocument().addObject('PartDesign::Body', 'Wheel')
+makeThroatedWormWheel(wheelBody, 10, 10, module, teethCount, threadCount)
 App.ActiveDocument.recompute()
 
-import Mesh
-toExport = [wormGear]
-Mesh.export(toExport, f"c:/del.me/freecad/wormGear-m{module}t{teethCount}th{threadCount}.stl")
+# toExport = [wormGear]
+# Mesh.export(toExport, f"~/del.me/freecad/wormGear-m{module}t{teethCount}th{threadCount}.stl")
