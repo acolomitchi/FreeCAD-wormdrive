@@ -184,27 +184,61 @@ def makeThroatedWormWheel(
     wheelStep = 2*math.pi / teethCount
     hobStep = 2*math.pi / threads
     
-    wormWheel = wheelPlate
+    hobs = []
     for i in range(2) :
-        stop = App.ActiveDocument.addObject("App::Link", f"{bodyObj.Name}hs{i}")
+        stop = App.ActiveDocument.addObject("App::Link", f"{bodyObj.Name}hstop{i}")
         bodyObj.Group = bodyObj.Group + [stop]
         stop.setLink(hob)
         plMatrix = App.Matrix()
         if threads > 1 :
             plMatrix.rotateY(i*hobStep)
         plMatrix.move(App.Vector(-hobbingRadius, 0, 0))
-        plMatrix.rotateZ(i*wheelStep)
         stop.Placement.Matrix = plMatrix
+        # the entire hob is in the leftward position,
+        # but with its full complicated geometry, most ofwhich doesn't contribute to the cut
+        # Trim it off a bit
+        corners = []
+        corners.append(App.Vector(-hobbingRadius, 0, -wheelThickness/2))
+        corners.append(App.Vector(-hobbingRadius, 0, wheelThickness/2))
+        corners.append(App.Vector(-hobbingRadius + gearOD / 2, 0, wheelThickness/2))
+        corners.append(App.Vector(-hobbingRadius + gearOD / 2, 0, -wheelThickness/2))
+        corners.append(App.Vector(-hobbingRadius, 0, -wheelThickness/2)) # we must close it. mustn't we? 
+        profileWire = Part.makePolygon(corners)
+        profileFeature = App.ActiveDocument.addObject("Part::Feature", f"{bodyObj.Name}_hobprofile{i}")
+        bodyObj.Group = bodyObj.Group + [profileFeature]
+        profileFeature.Shape = profileWire
+        if profileFeature.ViewObject is not None:
+            profileFeature.ViewObject.Visibility = False
+        trimmer = App.ActiveDocument.addObject("Part::Revolution", f"{bodyObj.Name}_hobtrim{i}")
+        bodyObj.Group = bodyObj.Group + [trimmer]
+        trimmer.Source = profileFeature
+        trimmer.Axis = App.Vector(0, 0, 1) # axis direction - Z
+        trimmer.Base = App.Vector(0, 0, 0) # axis point - origin
+        trimmer.Angle = 360 / teethCount # because we want to hob one tooth only
+        trimmer.Solid = True
+        trimmer.Symmetric = True # because the tooth is symmetric
+        print(f"Trimmer defined {trimmer.TypeId}")
+        #now, intersect it with the hob to get the chunck of it that will cut only this tooth
+        activeHob = App.ActiveDocument.addObject("Part::Cut", f"{bodyObj.Name}_hobcutter{i}")
+        bodyObj.Group = bodyObj.Group + [activeHob]
+        activeHob.Base = stop
+        activeHob.Tool = trimmer
+        activeHob.Refine = True
+        # finally, rotate the hob into the position of the corresponding tooth
+        plMatrix = App.Matrix()
+        plMatrix.rotateZ(i*wheelStep)
+        activeHob.Placement.Matrix = plMatrix
         
-        if i < teethCount - 1 :
-            substName = f"{bodyObj.Name}hobt{teethCount-i}"
-        else :
-            substName = f"{bodyObj.Name}_WormWheel"
-        hobbed = App.ActiveDocument.addObject("Part::Cut", substName)
-        bodyObj.Group = bodyObj.Group + [hobbed]
-        hobbed.Base = wormWheel
-        hobbed.Tool = stop
-        wormWheel = hobbed
+        hobs.append(activeHob)
+    trimmer = App.ActiveDocument.addObject("Part::MultiFuse", f"{bodyObj.Name}_hobWheel");
+    bodyObj.Group = bodyObj.Group + [trimmer]
+    trimmer.Shapes = hobs
+    trimmer.Refine = True
+    wormWheel = App.ActiveDocument.addObject("Part::Cut", f"{bodyObj.Name}_WormWheel");
+    bodyObj.Group = bodyObj.Group + [wormWheel]
+    wormWheel.Base = wheelPlate
+    wormWheel.Tool = trimmer
+    wormWheel.Refine = True
     return wormWheel
 
 if App.ActiveDocument is None:
