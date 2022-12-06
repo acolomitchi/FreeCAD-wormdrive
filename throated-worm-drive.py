@@ -1,3 +1,20 @@
+# (c) 2022 Adrian Colomitchi <acolomitchi@gmail.com>
+#
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU Lesser General Public License (LGPL)
+#   as published by the Free Software Foundation; either version 2 of
+#   the License, or (at your option) any later version.
+#   for detail see the LICENCE text file.
+#
+#   FCGear is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU Library General Public License for more details.
+#
+#   You should have received a copy of the GNU Library General Public
+#   License along with FCGear; if not, write to the Free Software
+#   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
+
 import FreeCAD as App
 import Part, PartDesign
 import Mesh, MeshPart
@@ -145,6 +162,34 @@ def makeThroatedWormGear( \
     wormGear.Tool = trimmer
     return wormGear
 
+def toMeshAndBack(obj, bodyObj, linearDeflection = 0.05) :
+    App.ActiveDocument.recompute() # otherwise the mesh will turn out empty
+    mesh = App.ActiveDocument.addObject("Mesh::Feature", f"{obj.Name}_meshed");
+    bodyObj.Group = bodyObj.Group + [mesh]
+    mesh.Mesh = MeshPart.meshFromShape(Shape = obj.Shape, LinearDeflection = linearDeflection, AngularDeflection = 0.698131, Relative = False)
+    
+    asPart = App.ActiveDocument.addObject("Part::Feature", f"{obj.Name}_meshedPart")
+    bodyObj.Group = bodyObj.Group + [asPart]
+    shape = Part.Shape()
+    shape.makeShapeFromMesh(mesh.Mesh.Topology, 0.01, True)
+    asPart.Shape = shape
+    App.ActiveDocument.removeObject(mesh.Name)
+    del mesh
+    
+    asSolid = App.ActiveDocument.addObject("Part::Feature", f"{obj.Name}_meshedPartSolid")
+    bodyObj.Group = bodyObj.Group + [asSolid]
+    asSolid.Shape = Part.Solid(asPart.Shape)
+    
+    # do not refine it, it takes ages!!!
+    #ret = App.ActiveDocument.addObject("Part::Refine", f"{obj.Name}_meshedSolidRefined");
+    #bodyObj.Group = bodyObj.Group + [ret]
+    #ret.Source = asSolid
+    
+    App.ActiveDocument.removeObject(obj.Name)
+    del obj
+    return asSolid
+
+
 def makeThroatedWormWheel(
     bodyObj, \
     sweepAngleStep = 7.5, wheelThickness = 10, \
@@ -157,89 +202,65 @@ def makeThroatedWormWheel(
     pressureAngleDeg = 20, \
     clearance = -1 \
 ) :
+    wOD = (teethCount + 2)*module
+    wID = (teethCount - 2.5)*module
+    optimalGearHeight = gearHeight #math.sqrt(wOD*wOD - wID*wID)
+    hobbingRadius = (wOD+gearID) / 2.0
+    
+    hobPart = wheelBody = App.activeDocument().addObject('PartDesign::Body', 'Hobs')
     hobName = f"{bodyObj.Name}_hobGear"
     if clearance < 0 :
         clearance = 0.150
     hob = makeThroatedWormGear( \
-        bodyObj, sweepAngleStep, \
+        hobPart, sweepAngleStep, \
         module, teethCount, threads, \
-        gearOD, gearID, gearHeight, pressureAngleDeg, \
+        gearOD, gearID, optimalGearHeight, pressureAngleDeg, \
         clearance, hobName \
     )
-    if hob.ViewObject is not None:
+    if hob.ViewObject is not None :
         hob.ViewObject.Visibility = False
-    wOD = (teethCount + 2)*module
-    wID = (teethCount - 2.5)*module
-    hobbingRadius = (wOD+gearID) / 2.0
-
+        
     wheelPlate = App.ActiveDocument.addObject("Part::Cylinder", f"{bodyObj.Name}_wheelRound")
     bodyObj.Group = bodyObj.Group + [wheelPlate]
     wheelPlate.Radius = wOD / 2.0
     wheelPlate.Height = wheelThickness
     plMatrix = App.Matrix()
-    plMatrix.move(App.Vector(0, 0, -wheelThickness/2.0))
-    # plMatrix.rotateX(math.pi /2)
+    plMatrix.move(App.Vector(hobbingRadius, 0, -wheelThickness/2.0))
     wheelPlate.Placement.Matrix = plMatrix
     
-    wheelStep = 2*math.pi / teethCount
-    hobStep = 2*math.pi / threads
+    hobStep = 2*math.pi/threads
+    wheelStep = 2*math.pi/teethCount
     
-    hobs = []
-    for i in range(2) :
-        stop = App.ActiveDocument.addObject("App::Link", f"{bodyObj.Name}hstop{i}")
-        bodyObj.Group = bodyObj.Group + [stop]
-        stop.setLink(hob)
+    for i in range(3) : ### this should go to range(teethCount)!!! BLODDY GEOM ERRORS AT THE SECOND STEP, tho!
+        hobLink = App.ActiveDocument.addObject("App::Link", f"{bodyObj.Name}_hob{i}")
+        bodyObj.Group = bodyObj.Group + [hobLink]
+        hobLink.setLink(hob)
         plMatrix = App.Matrix()
-        if threads > 1 :
-            plMatrix.rotateY(i*hobStep)
-        plMatrix.move(App.Vector(-hobbingRadius, 0, 0))
-        stop.Placement.Matrix = plMatrix
-        # the entire hob is in the leftward position,
-        # but with its full complicated geometry, most ofwhich doesn't contribute to the cut
-        # Trim it off a bit
-        corners = []
-        corners.append(App.Vector(-hobbingRadius, 0, -wheelThickness/2))
-        corners.append(App.Vector(-hobbingRadius, 0, wheelThickness/2))
-        corners.append(App.Vector(-hobbingRadius + gearOD / 2, 0, wheelThickness/2))
-        corners.append(App.Vector(-hobbingRadius + gearOD / 2, 0, -wheelThickness/2))
-        corners.append(App.Vector(-hobbingRadius, 0, -wheelThickness/2)) # we must close it. mustn't we? 
-        profileWire = Part.makePolygon(corners)
-        profileFeature = App.ActiveDocument.addObject("Part::Feature", f"{bodyObj.Name}_hobprofile{i}")
-        bodyObj.Group = bodyObj.Group + [profileFeature]
-        profileFeature.Shape = profileWire
-        if profileFeature.ViewObject is not None:
-            profileFeature.ViewObject.Visibility = False
-        trimmer = App.ActiveDocument.addObject("Part::Revolution", f"{bodyObj.Name}_hobtrim{i}")
-        bodyObj.Group = bodyObj.Group + [trimmer]
-        trimmer.Source = profileFeature
-        trimmer.Axis = App.Vector(0, 0, 1) # axis direction - Z
-        trimmer.Base = App.Vector(0, 0, 0) # axis point - origin
-        trimmer.Angle = 360 / teethCount # because we want to hob one tooth only
-        trimmer.Solid = True
-        trimmer.Symmetric = True # because the tooth is symmetric
-        print(f"Trimmer defined {trimmer.TypeId}")
-        #now, intersect it with the hob to get the chunck of it that will cut only this tooth
-        activeHob = App.ActiveDocument.addObject("Part::Cut", f"{bodyObj.Name}_hobcutter{i}")
-        bodyObj.Group = bodyObj.Group + [activeHob]
-        activeHob.Base = stop
-        activeHob.Tool = trimmer
-        activeHob.Refine = True
-        # finally, rotate the hob into the position of the corresponding tooth
-        plMatrix = App.Matrix()
-        plMatrix.rotateZ(i*wheelStep)
-        activeHob.Placement.Matrix = plMatrix
+        plMatrix.rotateY(i*hobStep)
+        hobLink.Placement.Matrix = plMatrix
+                
+        hobbed = App.ActiveDocument.addObject("Part::Cut", f"{bodyObj.Name}_hobt{i}")
+        bodyObj.Group = bodyObj.Group + [hobbed]
+        hobbed.Base = wheelPlate
+        hobbed.Tool = hobLink
+        # hobbed.Refine = True
         
-        hobs.append(activeHob)
-    trimmer = App.ActiveDocument.addObject("Part::MultiFuse", f"{bodyObj.Name}_hobWheel");
-    bodyObj.Group = bodyObj.Group + [trimmer]
-    trimmer.Shapes = hobs
-    trimmer.Refine = True
-    wormWheel = App.ActiveDocument.addObject("Part::Cut", f"{bodyObj.Name}_WormWheel");
-    bodyObj.Group = bodyObj.Group + [wormWheel]
-    wormWheel.Base = wheelPlate
-    wormWheel.Tool = trimmer
-    wormWheel.Refine = True
-    return wormWheel
+        #and then advance the plate
+        plMatrix = App.Matrix()
+        plMatrix.move(App.Vector(-hobbingRadius, 0, 0))
+        plMatrix.rotateZ(wheelStep)
+        plMatrix.move(App.Vector(hobbingRadius, 0, 0))
+        hobbed.Placement.Matrix = plMatrix
+
+        wheelPlate = hobbed
+        # and the bloody FreeCAD smashes the geometry immediately or after a couple of hobbing!!!
+        # replace it with a mesh and back to solid
+        # wheelPlate = toMeshAndBack(wheelPlate, bodyObj, 0.1)
+    # translate it back to origin before returning
+    plMatrix = App.Matrix()
+    plMatrix.move(App.Vector(-hobbingRadius, 0, 0))
+    wheelPlate.Placement.Matrix = plMatrix
+    return wheelPlate
 
 if App.ActiveDocument is None:
     doc = App.newDocument("NoName")
